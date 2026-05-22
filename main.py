@@ -533,7 +533,9 @@ def auto_book_earliest_appointment():
             return False
         refresh_token()
 
-    return _complete_booking(appointment)
+    result = _complete_booking(appointment)
+    refresh_token()
+    return result
 
 
 def main():
