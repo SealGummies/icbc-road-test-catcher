@@ -4,13 +4,13 @@ Automates monitoring and booking ICBC road test appointments for a target date r
 
 ## Current Project Status
 
-- ✅ Core booking flow is implemented in `main.py`
-- ✅ Supports polling multiple locations via `LOCATION_IDS`
-- ✅ Automatically detects eligible exam type at login (can override with `EXAM_TYPE`)
-- ✅ Handles OTP flow through Gmail IMAP
-- ✅ Can replace an existing booking **only if** an earlier slot is found
-- ✅ GitHub Actions workflow runs on a 6-hour schedule and manual trigger
-- ℹ️ No dedicated unit/integration test suite is currently included
+- [x] Core booking flow is implemented in `main.py`
+- [x] Supports polling multiple locations via `LOCATION_IDS`
+- [x] Automatically detects eligible exam type at login (can override with `EXAM_TYPE`)
+- [x] Handles OTP flow through Gmail IMAP
+- [x] Can replace an existing booking **only if** an earlier slot is found
+- [x] GitHub Actions workflow runs on a 6-hour schedule and manual trigger
+- [x] Unit/integration test
 
 ## How It Works
 
