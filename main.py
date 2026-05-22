@@ -56,6 +56,10 @@ drvr_id = None
 login_data_full = None
 
 
+def appointment_key(appt):
+    return (appt["appointmentDt"]["date"], appt.get("startTm", "99:99"))
+
+
 def validate_config():
     """Validate that all required environment variables are set"""
     required_vars = [
@@ -168,14 +172,8 @@ def get_earliest_appointment():
 
                         if effective_start <= appointment_date <= desired_end:
                             in_range += 1
-                            if earliest_appointment is None:
+                            if earliest_appointment is None or appointment_key(appointment) < appointment_key(earliest_appointment):
                                 earliest_appointment = appointment
-                            else:
-                                earliest_date = datetime.strptime(earliest_appointment["appointmentDt"]["date"], "%Y-%m-%d").date()
-                                if (appointment_date < earliest_date or
-                                        (appointment_date == earliest_date and
-                                         appointment.get("startTm", "99:99") < earliest_appointment.get("startTm", "99:99"))):
-                                    earliest_appointment = appointment
                 print(f"  → {in_range} slot(s) within desired range", flush=True)
 
         return earliest_appointment
@@ -530,7 +528,7 @@ def auto_book_earliest_appointment():
         existing_date = datetime.strptime(existing["appointmentDt"]["date"], "%Y-%m-%d").date()
         existing_time = existing.get("startTm", "")
         print(f"Existing appointment: {existing_date} {existing_time}", flush=True)
-        if new_date > existing_date or (new_date == existing_date and new_time >= existing_time):
+        if appointment_key(appointment) >= appointment_key(existing):
             print(f"Available slot {new_date} {new_time} is not earlier than existing {existing_date} {existing_time}, skipping", flush=True)
             return False
         print(f"Found earlier slot {new_date} {new_time} vs existing {existing_date} {existing_time}, will cancel and rebook", flush=True)
