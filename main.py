@@ -14,7 +14,8 @@ CONFIG = {
     "send_otp_url": "https://onlinebusiness.icbc.com/deas-api/v1/web/sendOTP",
     "verify_otp_url": "https://onlinebusiness.icbc.com/deas-api/v1/web/verifyOTP",
     "book_url": "https://onlinebusiness.icbc.com/deas-api/v1/web/book",
-    "cancel_url": "https://onlinebusiness.icbc.com/deas-api/v1/web/appointment",
+    "cancel_url": "https://onlinebusiness.icbc.com/deas-api/v1/web/cancel",
+    "driver_url": "https://onlinebusiness.icbc.com/deas-api/v1/web/driver",
 
     "credentials": {
         "drvrLastName": os.getenv("USER_LAST_NAME"),
@@ -245,6 +246,8 @@ def lock_appointment(appointment):
 def send_otp_email(booked_ts):
     global current_token, drvr_id
 
+    clear_old_icbc_emails()
+
     try:
         otp_data = {
             "bookedTs": booked_ts,
@@ -278,6 +281,24 @@ def send_otp_email(booked_ts):
     except Exception as e:
         print(f"Error sending OTP code: {e}")
         return False
+
+
+def clear_old_icbc_emails():
+    """Mark all existing unread ICBC emails as read to avoid picking up stale OTPs."""
+    mail = None
+    try:
+        mail = imaplib.IMAP4_SSL(CONFIG["gmail"]["imap_server"])
+        mail.login(CONFIG["gmail"]["email"], CONFIG["gmail"]["password"])
+        mail.select("inbox")
+        status, messages = mail.search(None, '(UNSEEN FROM "roadtests-donotreply@icbc.com")')
+        if status == "OK" and messages[0]:
+            for msg_id in messages[0].split():
+                mail.store(msg_id, '+FLAGS', '\\Seen')
+    except Exception:
+        pass
+    finally:
+        if mail:
+            mail.logout()
 
 
 def get_otp_from_email():
@@ -410,45 +431,45 @@ def cancel_appointment(existing):
     """Cancel an existing booked appointment. Returns True on success."""
     global current_token, drvr_id
 
-    booked_ts = existing.get("bookedTs")
     date_str = existing.get("appointmentDt", {}).get("date", "unknown")
+    print(f"Cancelling existing appointment on {date_str}...", flush=True)
 
-    if not booked_ts:
-        print("Cannot cancel: missing bookedTs in existing appointment", flush=True)
-        return False
-
-    print(f"Cancelling existing appointment on {date_str} (bookedTs: {booked_ts})...", flush=True)
-
-    # Send OTP for cancellation
-    if not send_otp_email(booked_ts):
-        return False
-
-    otp_code = None
-    for _ in range(20):
-        time.sleep(10)
-        otp_code = get_otp_from_email()
-        if otp_code:
-            break
-
-    if not otp_code:
-        print("Failed to get OTP code for cancellation", flush=True)
-        return False
-
-    if not verify_otp(booked_ts, otp_code):
-        return False
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": current_token,
+        "Origin": "https://onlinebusiness.icbc.com",
+        "Referer": "https://onlinebusiness.icbc.com/webdeas-ui/driver",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 OPR/116.0.0.0"
+    }
 
     try:
+        cancel_data = {
+            "userId": f"WEBD:{drvr_id}",
+            "instDlNum": None,
+            "appointment": existing,
+            "action": "CANCELLED",
+            "appointmentDt": existing["appointmentDt"],
+            "startTm": existing["startTm"],
+            "remark": "Cancelled by user action through WebDEAS"
+        }
+
         with httpx.Client() as client:
-            response = client.delete(
-                CONFIG["cancel_url"],
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": current_token,
-                    "Origin": "https://onlinebusiness.icbc.com",
-                    "Referer": "https://onlinebusiness.icbc.com/webdeas-ui/",
-                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 OPR/116.0.0.0"
-                }
+            # Step 1: refresh driver state (required before cancel)
+            client.put(
+                CONFIG["driver_url"],
+                json={"drvrLastName": CONFIG["credentials"]["drvrLastName"], "licenceNumber": CONFIG["credentials"]["licenceNumber"]},
+                headers=headers
             )
+
+            # Step 2: unlock any existing lock
+            client.put(
+                CONFIG["lock_url"],
+                json={"appointmentDt": {}, "dlExam": {}, "drvrDriver": {"drvrId": drvr_id}, "drscDrvSchl": {}},
+                headers=headers
+            )
+
+            # Step 3: cancel (no OTP needed)
+            response = client.put(CONFIG["cancel_url"], json=cancel_data, headers=headers)
             if not response.is_success:
                 print(f"Cancel failed {response.status_code}: {response.text}", flush=True)
                 response.raise_for_status()
