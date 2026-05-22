@@ -14,6 +14,7 @@ CONFIG = {
     "send_otp_url": "https://onlinebusiness.icbc.com/deas-api/v1/web/sendOTP",
     "verify_otp_url": "https://onlinebusiness.icbc.com/deas-api/v1/web/verifyOTP",
     "book_url": "https://onlinebusiness.icbc.com/deas-api/v1/web/book",
+    "cancel_url": "https://onlinebusiness.icbc.com/deas-api/v1/web/appointment",
 
     "credentials": {
         "drvrLastName": os.getenv("USER_LAST_NAME"),
@@ -396,14 +397,72 @@ def book_appointment(booked_ts):
         return False
 
 
-def auto_book_earliest_appointment():
-    appointment = get_earliest_appointment()
-    if not appointment:
-        print("No suitable dates available for booking")
+def get_existing_appointment():
+    """Returns current booked appointment from login data, or None."""
+    if login_data_full:
+        appointments = login_data_full.get('webAappointments', [])
+        if appointments:
+            return appointments[0]
+    return None
+
+
+def cancel_appointment(existing):
+    """Cancel an existing booked appointment. Returns True on success."""
+    global current_token, drvr_id
+
+    booked_ts = existing.get("bookedTs")
+    date_str = existing.get("appointmentDt", {}).get("date", "unknown")
+
+    if not booked_ts:
+        print("Cannot cancel: missing bookedTs in existing appointment", flush=True)
         return False
 
-    print(f"Found early date: {appointment['appointmentDt']['date']}")
+    print(f"Cancelling existing appointment on {date_str} (bookedTs: {booked_ts})...", flush=True)
 
+    # Send OTP for cancellation
+    if not send_otp_email(booked_ts):
+        return False
+
+    otp_code = None
+    for _ in range(20):
+        time.sleep(10)
+        otp_code = get_otp_from_email()
+        if otp_code:
+            break
+
+    if not otp_code:
+        print("Failed to get OTP code for cancellation", flush=True)
+        return False
+
+    if not verify_otp(booked_ts, otp_code):
+        return False
+
+    try:
+        with httpx.Client() as client:
+            response = client.delete(
+                CONFIG["cancel_url"],
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": current_token,
+                    "Origin": "https://onlinebusiness.icbc.com",
+                    "Referer": "https://onlinebusiness.icbc.com/webdeas-ui/",
+                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 OPR/116.0.0.0"
+                }
+            )
+            if not response.is_success:
+                print(f"Cancel failed {response.status_code}: {response.text}", flush=True)
+                response.raise_for_status()
+
+            print(f"Existing appointment on {date_str} cancelled successfully", flush=True)
+            return True
+
+    except Exception as e:
+        print(f"Error cancelling appointment: {e}", flush=True)
+        return False
+
+
+def _complete_booking(appointment):
+    """Lock, send OTP, verify, and book a given appointment slot."""
     booked_ts = lock_appointment(appointment)
     if not booked_ts:
         return False
@@ -419,16 +478,37 @@ def auto_book_earliest_appointment():
             break
 
     if not otp_code:
-        print("Failed to get OTP code from email")
+        print("Failed to get OTP code from email", flush=True)
         return False
 
     if not verify_otp(booked_ts, otp_code):
         return False
 
-    if not book_appointment(booked_ts):
+    return book_appointment(booked_ts)
+
+
+def auto_book_earliest_appointment():
+    appointment = get_earliest_appointment()
+    if not appointment:
+        print("No suitable dates available for booking")
         return False
 
-    return True
+    new_date = datetime.strptime(appointment["appointmentDt"]["date"], "%Y-%m-%d").date()
+    print(f"Earliest available slot: {new_date} {appointment['startTm']}", flush=True)
+
+    existing = get_existing_appointment()
+    if existing:
+        existing_date = datetime.strptime(existing["appointmentDt"]["date"], "%Y-%m-%d").date()
+        print(f"Existing appointment: {existing_date}", flush=True)
+        if new_date >= existing_date:
+            print(f"Available slot {new_date} is not earlier than existing {existing_date}, skipping", flush=True)
+            return False
+        print(f"Found earlier slot {new_date} vs existing {existing_date}, will cancel and rebook", flush=True)
+        if not cancel_appointment(existing):
+            print("Failed to cancel existing appointment, aborting to avoid losing it", flush=True)
+            return False
+
+    return _complete_booking(appointment)
 
 
 def main():
