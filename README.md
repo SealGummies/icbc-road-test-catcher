@@ -115,7 +115,7 @@ Expected settings in repo:
 
 - The script checks every 90 seconds by default.
 - Token refresh interval is 1500 seconds by default.
-- The process exits after a successful booking.
+- The process will continuously searching for earlier slot if possible
 
 ## Disclaimer
 
