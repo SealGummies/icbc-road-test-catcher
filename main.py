@@ -157,12 +157,16 @@ def get_earliest_appointment():
                 print(f"Location {location_id}: {len(appointments)} slots returned by API. "
                       f"Filtering for {desired_start} – {desired_end}", flush=True)
 
+                from datetime import timedelta
+                now_vancouver = datetime.now(pytz.timezone(CONFIG['timezone']))
+                tomorrow = (now_vancouver + timedelta(days=1)).date()
+                effective_start = max(desired_start, tomorrow)
                 in_range = 0
                 for appointment in appointments:
                     if "appointmentDt" in appointment:
                         appointment_date = datetime.strptime(appointment["appointmentDt"]["date"], "%Y-%m-%d").date()
 
-                        if desired_start <= appointment_date <= desired_end:
+                        if effective_start <= appointment_date <= desired_end:
                             in_range += 1
                             if (earliest_appointment is None or
                                     appointment_date < datetime.strptime(earliest_appointment["appointmentDt"]["date"],
@@ -527,6 +531,7 @@ def auto_book_earliest_appointment():
         if not cancel_appointment(existing):
             print("Failed to cancel existing appointment, aborting to avoid losing it", flush=True)
             return False
+        refresh_token()
 
     return _complete_booking(appointment)
 
@@ -553,9 +558,7 @@ def main():
                     last_token_time = current_time
 
             if current_time - last_check_time >= CONFIG["check_interval"]:
-                if auto_book_earliest_appointment():
-                    print("Booking completed successfully! Script terminating.")
-                    break
+                auto_book_earliest_appointment()
                 last_check_time = current_time
 
             time.sleep(1)
