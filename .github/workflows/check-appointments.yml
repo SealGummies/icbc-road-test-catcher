@@ -22,12 +22,12 @@ jobs:
 
       - name: Run appointment checker
         env:
-          USER_LAST_NAME: ${{ secrets.USER_LAST_NAME }}
           USER_LICENSE_NUMBER: ${{ secrets.USER_LICENSE_NUMBER }}
           USER_KEYWORD: ${{ secrets.USER_KEYWORD }}
-          USER_GMAIL: ${{ secrets.USER_GMAIL }}
           USER_GMAIL_APP_PASSWORD: ${{ secrets.USER_GMAIL_APP_PASSWORD }}
-          DESIRED_DATE_START: ${{ secrets.DESIRED_DATE_START }}
-          DESIRED_DATE_END: ${{ secrets.DESIRED_DATE_END }}
-          LOCATION_IDS: ${{ secrets.LOCATION_IDS }}
+          USER_LAST_NAME: ${{ vars.USER_LAST_NAME }}
+          USER_GMAIL: ${{ vars.USER_GMAIL }}
+          DESIRED_DATE_START: ${{ vars.DESIRED_DATE_START }}
+          DESIRED_DATE_END: ${{ vars.DESIRED_DATE_END }}
+          LOCATION_IDS: ${{ vars.LOCATION_IDS }}
         run: python main.py
