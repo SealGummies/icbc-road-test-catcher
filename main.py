@@ -22,7 +22,7 @@ CONFIG = {
     },
 
     "appointment_request_base": {
-        "examType": "5-R-1",
+        "examType": os.getenv("EXAM_TYPE", "7-R-1"),
         "examDate": datetime.now().strftime("%Y-%m-%d"),
         "prfDaysOfWeek": "[0,1,2,3,4,5,6]",
         "prfPartsOfDay": "[0,1]",
@@ -51,6 +51,7 @@ CONFIG = {
 current_token = None
 last_token_refresh = None
 drvr_id = None
+login_data_full = None
 
 
 def validate_config():
@@ -79,7 +80,7 @@ def validate_config():
 
 
 def refresh_token():
-    global current_token, last_token_refresh, drvr_id
+    global current_token, last_token_refresh, drvr_id, login_data_full
     try:
         with httpx.Client() as client:
             response = client.put(
@@ -87,6 +88,8 @@ def refresh_token():
                 json=CONFIG["credentials"],
                 headers={
                     "Content-Type": "application/json",
+                    "Origin": "https://onlinebusiness.icbc.com",
+                    "Referer": "https://onlinebusiness.icbc.com/webdeas-ui/",
                     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 OPR/116.0.0.0"
                 }
             )
@@ -98,9 +101,15 @@ def refresh_token():
                 last_token_refresh = datetime.now(pytz.timezone(CONFIG['timezone']))
 
                 try:
-                    login_data = response.json()
-                    drvr_id = login_data.get('drvrId')
-                    print(f"Token refreshed. drvrID: {drvr_id}")
+                    login_data_full = response.json()
+                    drvr_id = login_data_full.get('drvrId')
+                    eligible = login_data_full.get('eligibleExams', [])
+                    if eligible:
+                        exam_code = eligible[0]["code"]
+                        CONFIG["appointment_request_base"]["examType"] = exam_code
+                        print(f"Token refreshed. drvrID: {drvr_id}, exam type: {exam_code}", flush=True)
+                    else:
+                        print(f"Token refreshed. drvrID: {drvr_id}, WARNING: no eligible exams found", flush=True)
                 except Exception as e:
                     print(f"Failed to get drvrID from response: {e}")
 
@@ -169,7 +178,7 @@ def get_earliest_appointment():
 
 
 def lock_appointment(appointment):
-    global current_token, drvr_id
+    global current_token, drvr_id, login_data_full
 
     if not current_token or not drvr_id:
         if not refresh_token():
@@ -180,10 +189,16 @@ def lock_appointment(appointment):
 
         unlock_data = {"appointmentDt": {}, "dlExam": {}, "drvrDriver": {"drvrId": drvr_id}, "drscDrvSchl": {}}
 
+        # Build drvrDriver using full login response if available
+        drvr_driver = login_data_full.get("drvrDriver", {"drvrId": drvr_id}) if login_data_full else {"drvrId": drvr_id}
+        if "drvrId" not in drvr_driver:
+            drvr_driver["drvrId"] = drvr_id
+
         lock_data = {
             "appointmentDt": appointment["appointmentDt"],
             "dlExam": appointment["dlExam"],
-            "drvrDriver": {"drvrId": drvr_id},
+            "examType": appointment["dlExam"]["code"],
+            "drvrDriver": drvr_driver,
             "drscDrvSchl": {},
             "instructorDlNum": None,
             "bookedTs": booked_ts,
@@ -197,20 +212,21 @@ def lock_appointment(appointment):
         headers = {
             "Content-Type": "application/json",
             "Authorization": current_token,
+            "Origin": "https://onlinebusiness.icbc.com",
+            "Referer": "https://onlinebusiness.icbc.com/webdeas-ui/",
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 OPR/116.0.0.0"
         }
 
         with httpx.Client() as client:
             print(f"Sending unlock request...", flush=True)
             response = client.put(CONFIG["lock_url"], json=unlock_data, headers=headers)
+            print(f"Unlock response {response.status_code}: {response.text}", flush=True)
             if not response.is_success:
-                print(f"Unlock step failed {response.status_code}: {response.text}", flush=True)
                 response.raise_for_status()
 
             time.sleep(10)
 
             print(f"Sending lock request for {appointment['appointmentDt']['date']}...", flush=True)
-            print(f"lock_data: {lock_data}", flush=True)
             response = client.put(CONFIG["lock_url"], json=lock_data, headers=headers)
             if not response.is_success:
                 print(f"Lock step failed {response.status_code}: {response.text}", flush=True)
