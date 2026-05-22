@@ -168,10 +168,14 @@ def get_earliest_appointment():
 
                         if effective_start <= appointment_date <= desired_end:
                             in_range += 1
-                            if (earliest_appointment is None or
-                                    appointment_date < datetime.strptime(earliest_appointment["appointmentDt"]["date"],
-                                                                         "%Y-%m-%d").date()):
+                            if earliest_appointment is None:
                                 earliest_appointment = appointment
+                            else:
+                                earliest_date = datetime.strptime(earliest_appointment["appointmentDt"]["date"], "%Y-%m-%d").date()
+                                if (appointment_date < earliest_date or
+                                        (appointment_date == earliest_date and
+                                         appointment.get("startTm", "99:99") < earliest_appointment.get("startTm", "99:99"))):
+                                    earliest_appointment = appointment
                 print(f"  → {in_range} slot(s) within desired range", flush=True)
 
         return earliest_appointment
@@ -518,16 +522,18 @@ def auto_book_earliest_appointment():
         return False
 
     new_date = datetime.strptime(appointment["appointmentDt"]["date"], "%Y-%m-%d").date()
-    print(f"Earliest available slot: {new_date} {appointment['startTm']}", flush=True)
+    new_time = appointment.get("startTm", "")
+    print(f"Earliest available slot: {new_date} {new_time}", flush=True)
 
     existing = get_existing_appointment()
     if existing:
         existing_date = datetime.strptime(existing["appointmentDt"]["date"], "%Y-%m-%d").date()
-        print(f"Existing appointment: {existing_date}", flush=True)
-        if new_date >= existing_date:
-            print(f"Available slot {new_date} is not earlier than existing {existing_date}, skipping", flush=True)
+        existing_time = existing.get("startTm", "")
+        print(f"Existing appointment: {existing_date} {existing_time}", flush=True)
+        if new_date > existing_date or (new_date == existing_date and new_time >= existing_time):
+            print(f"Available slot {new_date} {new_time} is not earlier than existing {existing_date} {existing_time}, skipping", flush=True)
             return False
-        print(f"Found earlier slot {new_date} vs existing {existing_date}, will cancel and rebook", flush=True)
+        print(f"Found earlier slot {new_date} {new_time} vs existing {existing_date} {existing_time}, will cancel and rebook", flush=True)
         if not cancel_appointment(existing):
             print("Failed to cancel existing appointment, aborting to avoid losing it", flush=True)
             return False
