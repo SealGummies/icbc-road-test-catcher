@@ -23,7 +23,7 @@ CONFIG = {
 
     "appointment_request_base": {
         "examType": "5-R-1",
-        "examDate": "2025-06-13",
+        "examDate": datetime.now().strftime("%Y-%m-%d"),
         "prfDaysOfWeek": "[0,1,2,3,4,5,6]",
         "prfPartsOfDay": "[0,1]",
         "lastName": os.getenv("USER_LAST_NAME"),
@@ -101,8 +101,8 @@ def refresh_token():
                     login_data = response.json()
                     drvr_id = login_data.get('drvrId')
                     print(f"Token refreshed. drvrID: {drvr_id}")
-                except:
-                    print("Failed to get drvrID from response")
+                except Exception as e:
+                    print(f"Failed to get drvrID from response: {e}")
 
                 return True
 
@@ -268,7 +268,7 @@ def get_otp_from_email():
         mail.login(CONFIG["gmail"]["email"], CONFIG["gmail"]["password"])
         mail.select("inbox")
 
-        status, messages = mail.search(None, '(FROM "roadtests-donotreply@icbc.com")')
+        status, messages = mail.search(None, '(UNSEEN FROM "roadtests-donotreply@icbc.com")')
         if status != "OK":
             print("Failed to find emails from ICBC")
             return None
@@ -301,7 +301,8 @@ def get_otp_from_email():
         print(f"Error getting OTP code from email: {e}")
         return None
     finally:
-        mail.logout()
+        if mail:
+            mail.logout()
 
 
 def verify_otp(booked_ts, otp_code):
@@ -430,8 +431,8 @@ def main():
             current_time = time.time()
 
             if current_time - last_token_time >= CONFIG["token_refresh_interval"]:
-                refresh_token()
-                last_token_time = current_time
+                if refresh_token():
+                    last_token_time = current_time
 
             if current_time - last_check_time >= CONFIG["check_interval"]:
                 if auto_book_earliest_appointment():
