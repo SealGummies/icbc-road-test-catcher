@@ -128,6 +128,7 @@ def get_earliest_appointment():
         with httpx.Client() as client:
             for location_id in CONFIG["location_ids"]:
                 request_data = CONFIG["appointment_request_base"].copy()
+                request_data["examDate"] = datetime.now().strftime("%Y-%m-%d")
                 request_data["aPosID"] = location_id
 
                 response = client.post(
@@ -142,17 +143,22 @@ def get_earliest_appointment():
                 response.raise_for_status()
 
                 appointments = response.json()
-                print(f"Found {len(appointments)} available dates for location {location_id}")
+                print(f"Location {location_id}: {len(appointments)} slots returned by API. "
+                      f"Filtering for {desired_start} – {desired_end}", flush=True)
 
+                in_range = 0
                 for appointment in appointments:
                     if "appointmentDt" in appointment:
                         appointment_date = datetime.strptime(appointment["appointmentDt"]["date"], "%Y-%m-%d").date()
+                        print(f"  slot: {appointment['appointmentDt']['date']} {appointment.get('startTm', '')}", flush=True)
 
                         if desired_start <= appointment_date <= desired_end:
+                            in_range += 1
                             if (earliest_appointment is None or
                                     appointment_date < datetime.strptime(earliest_appointment["appointmentDt"]["date"],
                                                                          "%Y-%m-%d").date()):
                                 earliest_appointment = appointment
+                print(f"  → {in_range} slot(s) within desired range", flush=True)
 
         return earliest_appointment
 

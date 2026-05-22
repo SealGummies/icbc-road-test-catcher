@@ -30,4 +30,5 @@ jobs:
           DESIRED_DATE_START: ${{ vars.DESIRED_DATE_START }}
           DESIRED_DATE_END: ${{ vars.DESIRED_DATE_END }}
           LOCATION_IDS: ${{ vars.LOCATION_IDS }}
+          PYTHONUNBUFFERED: "1"
         run: python main.py
