@@ -1,0 +1,49 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - uses: actions/setup-python@v5.6.0
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Test appointment_key comparison logic
+        run: |
+          python -c "
+          from main import appointment_key
+
+          def make(date, time):
+              return {'appointmentDt': {'date': date}, 'startTm': time}
+
+          # Same date, earlier time should win
+          a1 = make('2026-10-29', '13:30')
+          a2 = make('2026-10-29', '09:10')
+          assert appointment_key(a2) < appointment_key(a1), 'Same date: earlier time should be less'
+
+          # Earlier date always wins regardless of time
+          a3 = make('2026-10-28', '23:59')
+          assert appointment_key(a3) < appointment_key(a1), 'Earlier date should always be less'
+
+          # Later date should not win
+          a4 = make('2026-10-30', '08:00')
+          assert appointment_key(a4) > appointment_key(a1), 'Later date should be greater'
+
+          # Equal slots
+          a5 = make('2026-10-29', '13:30')
+          assert appointment_key(a5) == appointment_key(a1), 'Equal slots should be equal'
+
+          print('All tests passed.')
+          "
