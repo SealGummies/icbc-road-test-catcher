@@ -161,7 +161,6 @@ def get_earliest_appointment():
                 for appointment in appointments:
                     if "appointmentDt" in appointment:
                         appointment_date = datetime.strptime(appointment["appointmentDt"]["date"], "%Y-%m-%d").date()
-                        print(f"  slot: {appointment['appointmentDt']['date']} {appointment.get('startTm', '')}", flush=True)
 
                         if desired_start <= appointment_date <= desired_end:
                             in_range += 1
