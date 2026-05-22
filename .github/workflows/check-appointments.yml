@@ -1,0 +1,33 @@
+name: Check ICBC Appointments
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # every 6 hours
+  workflow_dispatch:        # allow manual trigger
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run appointment checker
+        env:
+          USER_LAST_NAME: ${{ secrets.USER_LAST_NAME }}
+          USER_LICENSE_NUMBER: ${{ secrets.USER_LICENSE_NUMBER }}
+          USER_KEYWORD: ${{ secrets.USER_KEYWORD }}
+          USER_GMAIL: ${{ secrets.USER_GMAIL }}
+          USER_GMAIL_APP_PASSWORD: ${{ secrets.USER_GMAIL_APP_PASSWORD }}
+          DESIRED_DATE_START: ${{ secrets.DESIRED_DATE_START }}
+          DESIRED_DATE_END: ${{ secrets.DESIRED_DATE_END }}
+          LOCATION_IDS: ${{ secrets.LOCATION_IDS }}
+        run: python main.py

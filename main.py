@@ -30,8 +30,7 @@ CONFIG = {
         "licenseNumber": os.getenv("USER_LICENSE_NUMBER")
     },
 
-    # Duncan
-    "location_ids": [214],
+    "location_ids": [int(x) for x in os.getenv("LOCATION_IDS", "274").split(",")],
 
     "gmail": {
         "email": os.getenv("USER_GMAIL"),
