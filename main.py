@@ -194,38 +194,34 @@ def lock_appointment(appointment):
             "signature": appointment["signature"]
         }
 
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": current_token,
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 OPR/116.0.0.0"
+        }
+
         with httpx.Client() as client:
-            response = client.put(
-                CONFIG["lock_url"],
-                json=unlock_data,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": current_token,
-                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 OPR/116.0.0.0"
-                }
-            )
-            response.raise_for_status()
+            print(f"Sending unlock request...", flush=True)
+            response = client.put(CONFIG["lock_url"], json=unlock_data, headers=headers)
+            if not response.is_success:
+                print(f"Unlock step failed {response.status_code}: {response.text}", flush=True)
+                response.raise_for_status()
 
             time.sleep(10)
 
-            response = client.put(
-                CONFIG["lock_url"],
-                json=lock_data,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": current_token,
-                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 OPR/116.0.0.0"
-                }
-            )
-            response.raise_for_status()
+            print(f"Sending lock request for {appointment['appointmentDt']['date']}...", flush=True)
+            print(f"lock_data: {lock_data}", flush=True)
+            response = client.put(CONFIG["lock_url"], json=lock_data, headers=headers)
+            if not response.is_success:
+                print(f"Lock step failed {response.status_code}: {response.text}", flush=True)
+                response.raise_for_status()
 
             resulting_timezone = response.json()
-
-            print(f"Date {appointment['appointmentDt']['date']} successfully locked")
+            print(f"Date {appointment['appointmentDt']['date']} successfully locked", flush=True)
             return resulting_timezone["bookedTs"]
 
     except Exception as e:
-        print(f"Error locking appointment: {e}")
+        print(f"Error locking appointment: {e}", flush=True)
         return None
 
 
