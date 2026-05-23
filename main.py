@@ -128,17 +128,26 @@ def refresh_token():
         return False
 
 
-def get_earliest_appointment():
+def get_available_appointments(limit=None):
+    """Return available slots in desired range, sorted earliest first.
+
+    limit: if set, return at most this many candidates.
+    """
     global current_token
 
     if not current_token:
         if not refresh_token():
-            return None
+            return []
 
     try:
-        earliest_appointment = None
+        candidates = []
         desired_start = datetime.strptime(CONFIG["desired_date_range"]["start"], "%Y-%m-%d").date()
         desired_end = datetime.strptime(CONFIG["desired_date_range"]["end"], "%Y-%m-%d").date()
+
+        from datetime import timedelta
+        now_vancouver = datetime.now(pytz.timezone(CONFIG['timezone']))
+        tomorrow = (now_vancouver + timedelta(days=1)).date()
+        effective_start = max(desired_start, tomorrow)
 
         with httpx.Client() as client:
             for location_id in CONFIG["location_ids"]:
@@ -159,32 +168,36 @@ def get_earliest_appointment():
 
                 appointments = response.json()
                 print(f"Location {location_id}: {len(appointments)} slots returned by API. "
-                      f"Filtering for {desired_start} – {desired_end}", flush=True)
+                      f"Filtering for {effective_start} – {desired_end}", flush=True)
 
-                from datetime import timedelta
-                now_vancouver = datetime.now(pytz.timezone(CONFIG['timezone']))
-                tomorrow = (now_vancouver + timedelta(days=1)).date()
-                effective_start = max(desired_start, tomorrow)
                 in_range = 0
                 for appointment in appointments:
                     if "appointmentDt" in appointment:
                         appointment_date = datetime.strptime(appointment["appointmentDt"]["date"], "%Y-%m-%d").date()
-
                         if effective_start <= appointment_date <= desired_end:
                             in_range += 1
-                            if earliest_appointment is None or appointment_key(appointment) < appointment_key(earliest_appointment):
-                                earliest_appointment = appointment
+                            candidates.append(appointment)
                 print(f"  → {in_range} slot(s) within desired range", flush=True)
 
-        return earliest_appointment
+        candidates.sort(key=appointment_key)
+        if limit:
+            candidates = candidates[:limit]
+        return candidates
 
     except Exception as e:
         print(f"Error checking available dates: {e}")
         current_token = None
-        return None
+        return []
 
 
-def lock_appointment(appointment):
+def get_earliest_appointment():
+    slots = get_available_appointments(limit=1)
+    return slots[0] if slots else None
+
+
+def lock_appointment(appointment, is_reschedule=False):
+    """Lock a slot. With is_reschedule=True, skips the driver-refresh/cancel steps
+    so an existing booking is preserved while we hold the new slot temporarily."""
     global current_token, drvr_id, login_data_full
 
     if not current_token or not drvr_id:
@@ -196,7 +209,6 @@ def lock_appointment(appointment):
 
         unlock_data = {"appointmentDt": {}, "dlExam": {}, "drvrDriver": {"drvrId": drvr_id}, "drscDrvSchl": {}}
 
-        # Build drvrDriver using full login response if available
         drvr_driver = login_data_full.get("drvrDriver", {"drvrId": drvr_id}) if login_data_full else {"drvrId": drvr_id}
         if "drvrId" not in drvr_driver:
             drvr_driver["drvrId"] = drvr_id
@@ -216,31 +228,44 @@ def lock_appointment(appointment):
             "signature": appointment["signature"]
         }
 
-        headers = {
+        booking_headers = {
             "Content-Type": "application/json",
             "Authorization": current_token,
             "Origin": "https://onlinebusiness.icbc.com",
-            "Referer": "https://onlinebusiness.icbc.com/webdeas-ui/",
+            "Referer": "https://onlinebusiness.icbc.com/webdeas-ui/booking",
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 OPR/116.0.0.0"
         }
+        driver_headers = {**booking_headers, "Referer": "https://onlinebusiness.icbc.com/webdeas-ui/driver"}
 
         with httpx.Client() as client:
+            if is_reschedule:
+                # Mirror browser reschedule sequence: refresh driver state first,
+                # then clear any temp lock, then lock new slot — WITHOUT cancelling existing booking.
+                r = client.put(
+                    CONFIG["driver_url"],
+                    json={"drvrLastName": CONFIG["credentials"]["drvrLastName"],
+                          "licenceNumber": CONFIG["credentials"]["licenceNumber"]},
+                    headers=driver_headers
+                )
+                print(f"[reschedule] driver refresh: {r.status_code} {r.text[:200]}", flush=True)
+
             print(f"Sending unlock request...", flush=True)
-            response = client.put(CONFIG["lock_url"], json=unlock_data, headers=headers)
-            print(f"Unlock response {response.status_code}: {response.text}", flush=True)
+            response = client.put(CONFIG["lock_url"], json=unlock_data, headers=booking_headers)
+            print(f"Unlock response {response.status_code}: {response.text[:200]}", flush=True)
             if not response.is_success:
                 response.raise_for_status()
 
-            time.sleep(10)
+            time.sleep(2)
 
-            print(f"Sending lock request for {appointment['appointmentDt']['date']}...", flush=True)
-            response = client.put(CONFIG["lock_url"], json=lock_data, headers=headers)
+            target = appointment['appointmentDt']['date']
+            print(f"Sending lock request for {target} {appointment.get('startTm','')}...", flush=True)
+            response = client.put(CONFIG["lock_url"], json=lock_data, headers=booking_headers)
+            print(f"Lock response {response.status_code}: {response.text[:500]}", flush=True)
             if not response.is_success:
-                print(f"Lock step failed {response.status_code}: {response.text}", flush=True)
                 response.raise_for_status()
 
             resulting_timezone = response.json()
-            print(f"Date {appointment['appointmentDt']['date']} successfully locked", flush=True)
+            print(f"Lock succeeded for {target}. bookedTs={resulting_timezone.get('bookedTs')}", flush=True)
             return resulting_timezone["bookedTs"]
 
     except Exception as e:
@@ -273,6 +298,7 @@ def send_otp_email(booked_ts):
                 timeout=timeout
             )
 
+            print(f"[otp] sendOTP response: {response.status_code} {response.text[:300]}", flush=True)
             response.raise_for_status()
 
             result = response.json()
@@ -371,6 +397,7 @@ def verify_otp(booked_ts, otp_code):
                 }
             )
 
+            print(f"[otp] verifyOTP response: {response.status_code} {response.text[:300]}", flush=True)
             response.raise_for_status()
 
             result = response.json()
@@ -408,6 +435,7 @@ def book_appointment(booked_ts):
                 }
             )
 
+            print(f"[book] book response: {response.status_code} {response.text[:500]}", flush=True)
             response.raise_for_status()
 
             result = response.json()
@@ -460,23 +488,25 @@ def cancel_appointment(existing):
 
         with httpx.Client() as client:
             # Step 1: refresh driver state (required before cancel)
-            client.put(
+            r = client.put(
                 CONFIG["driver_url"],
                 json={"drvrLastName": CONFIG["credentials"]["drvrLastName"], "licenceNumber": CONFIG["credentials"]["licenceNumber"]},
                 headers=headers
             )
+            print(f"[cancel] driver refresh: {r.status_code} {r.text[:200]}", flush=True)
 
             # Step 2: unlock any existing lock
-            client.put(
+            r = client.put(
                 CONFIG["lock_url"],
                 json={"appointmentDt": {}, "dlExam": {}, "drvrDriver": {"drvrId": drvr_id}, "drscDrvSchl": {}},
                 headers=headers
             )
+            print(f"[cancel] unlock: {r.status_code} {r.text[:200]}", flush=True)
 
             # Step 3: cancel (no OTP needed)
             response = client.put(CONFIG["cancel_url"], json=cancel_data, headers=headers)
+            print(f"[cancel] cancel response: {response.status_code} {response.text[:500]}", flush=True)
             if not response.is_success:
-                print(f"Cancel failed {response.status_code}: {response.text}", flush=True)
                 response.raise_for_status()
 
             print(f"Existing appointment on {date_str} cancelled successfully", flush=True)
@@ -487,9 +517,10 @@ def cancel_appointment(existing):
         return False
 
 
-def _complete_booking(appointment):
-    """Lock, send OTP, verify, and book a given appointment slot."""
-    booked_ts = lock_appointment(appointment)
+def _complete_booking(appointment, booked_ts=None):
+    """OTP-verify and book a slot. If booked_ts is provided the slot is already locked."""
+    if booked_ts is None:
+        booked_ts = lock_appointment(appointment)
     if not booked_ts:
         return False
 
@@ -514,11 +545,12 @@ def _complete_booking(appointment):
 
 
 def auto_book_earliest_appointment():
-    appointment = get_earliest_appointment()
-    if not appointment:
+    candidates = get_available_appointments(limit=5)
+    if not candidates:
         print("No suitable dates available for booking")
         return False
 
+    appointment = candidates[0]
     new_date = datetime.strptime(appointment["appointmentDt"]["date"], "%Y-%m-%d").date()
     new_time = appointment.get("startTm", "")
     print(f"Earliest available slot: {new_date} {new_time}", flush=True)
@@ -531,13 +563,53 @@ def auto_book_earliest_appointment():
         if appointment_key(appointment) >= appointment_key(existing):
             print(f"Available slot {new_date} {new_time} is not earlier than existing {existing_date} {existing_time}, skipping", flush=True)
             return False
-        print(f"Found earlier slot {new_date} {new_time} vs existing {existing_date} {existing_time}, will cancel and rebook", flush=True)
-        if not cancel_appointment(existing):
-            print("Failed to cancel existing appointment, aborting to avoid losing it", flush=True)
-            return False
-        refresh_token()
 
-    result = _complete_booking(appointment)
+        print(f"Found earlier slot {new_date} {new_time} vs existing {existing_date} {existing_time}", flush=True)
+
+        # Reschedule flow: lock new slot FIRST while keeping existing booking safe.
+        # The existing appointment is only cancelled after we confirm the new lock.
+        # If the new slot is already taken, we never lose the existing booking.
+        result = False
+        for i, candidate in enumerate(candidates):
+            candidate_date = candidate["appointmentDt"]["date"]
+            candidate_time = candidate.get("startTm", "")
+            if i > 0:
+                print(f"Trying next candidate: {candidate_date} {candidate_time}", flush=True)
+
+            print(f"Attempting reschedule lock for {candidate_date} {candidate_time} "
+                  f"(existing appointment preserved until lock confirmed)...", flush=True)
+            booked_ts = lock_appointment(candidate, is_reschedule=True)
+
+            if booked_ts:
+                print(f"Lock confirmed. Now cancelling existing appointment on "
+                      f"{existing_date} {existing_time}...", flush=True)
+                if not cancel_appointment(existing):
+                    print("Warning: failed to cancel existing appointment; "
+                          "proceeding anyway — server may handle it atomically.", flush=True)
+                refresh_token()
+                result = _complete_booking(candidate, booked_ts=booked_ts)
+                if result:
+                    break
+                print(f"Booking failed after successful lock for {candidate_date} {candidate_time}.", flush=True)
+            else:
+                print(f"Lock failed for {candidate_date} {candidate_time} — slot likely taken. "
+                      f"Existing appointment on {existing_date} {existing_time} is still safe.", flush=True)
+
+        refresh_token()
+        return result
+
+    # No existing appointment — just try candidates in order.
+    result = False
+    for i, candidate in enumerate(candidates):
+        candidate_date = candidate["appointmentDt"]["date"]
+        candidate_time = candidate.get("startTm", "")
+        if i > 0:
+            print(f"Retrying with next candidate: {candidate_date} {candidate_time}", flush=True)
+        result = _complete_booking(candidate)
+        if result:
+            break
+        print(f"Failed to book {candidate_date} {candidate_time}, trying next candidate...", flush=True)
+
     refresh_token()
     return result
 
