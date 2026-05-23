@@ -636,7 +636,9 @@ def main():
                     last_token_time = current_time
 
             if current_time - last_check_time >= CONFIG["check_interval"]:
-                auto_book_earliest_appointment()
+                if auto_book_earliest_appointment():
+                    print("Earlier slot successfully booked. Stopping.", flush=True)
+                    return
                 last_check_time = current_time
 
             time.sleep(1)
