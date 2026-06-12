@@ -1,8 +1,8 @@
 name: Check ICBC Appointments
 
 on:
-  #schedule:
-  #  - cron: '50 5,11,17,23 * * *'  # every 6 hours
+  schedule:
+    - cron: '45 5,11,17,23 * * *'  # every 6 hours
   workflow_dispatch:        # allow manual trigger
 
 jobs:
