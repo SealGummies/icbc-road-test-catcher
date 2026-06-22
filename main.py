@@ -54,6 +54,7 @@ current_token = None
 last_token_refresh = None
 drvr_id = None
 login_data_full = None
+_icbc_email_base_seq = 0
 
 
 def appointment_key(appt):
@@ -274,9 +275,32 @@ def lock_appointment(appointment, is_reschedule=False):
 
 
 def send_otp_email(booked_ts):
-    global current_token, drvr_id
+    global current_token, drvr_id, _icbc_email_base_seq
 
-    clear_old_icbc_emails()
+    mail = None
+    try:
+        mail = imaplib.IMAP4_SSL(CONFIG["gmail"]["imap_server"])
+        mail.login(CONFIG["gmail"]["email"], CONFIG["gmail"]["password"])
+        mail.select("inbox")
+        status, messages = mail.search(None, 'FROM "roadtests-donotreply@icbc.com"')
+        if status == "OK" and messages[0]:
+            seq_nums = messages[0].split()
+            _icbc_email_base_seq = int(seq_nums[-1])
+            print(f"[otp] IMAP base seq recorded: {_icbc_email_base_seq} ({len(seq_nums)} existing ICBC email(s))", flush=True)
+        else:
+            _icbc_email_base_seq = 0
+            print("[otp] No existing ICBC emails; base seq = 0", flush=True)
+    except imaplib.IMAP4.error as e:
+        print(f"[otp] IMAP login/search failed while recording base seq: {e}", flush=True)
+        print("[otp] WARNING: stale OTP isolation unavailable — proceeding anyway", flush=True)
+    except Exception as e:
+        print(f"[otp] Unexpected error recording base seq: {e}", flush=True)
+    finally:
+        if mail:
+            try:
+                mail.logout()
+            except Exception:
+                pass
 
     try:
         otp_data = {
@@ -314,42 +338,30 @@ def send_otp_email(booked_ts):
         return False
 
 
-def clear_old_icbc_emails():
-    """Mark all existing unread ICBC emails as read to avoid picking up stale OTPs."""
-    mail = None
-    try:
-        mail = imaplib.IMAP4_SSL(CONFIG["gmail"]["imap_server"])
-        mail.login(CONFIG["gmail"]["email"], CONFIG["gmail"]["password"])
-        mail.select("inbox")
-        status, messages = mail.search(None, '(UNSEEN FROM "roadtests-donotreply@icbc.com")')
-        if status == "OK" and messages[0]:
-            for msg_id in messages[0].split():
-                mail.store(msg_id, '+FLAGS', '\\Seen')
-    except Exception:
-        pass
-    finally:
-        if mail:
-            mail.logout()
-
-
 def get_otp_from_email():
+    global _icbc_email_base_seq
     mail = None
     try:
         mail = imaplib.IMAP4_SSL(CONFIG["gmail"]["imap_server"])
-        mail.login(CONFIG["gmail"]["email"], CONFIG["gmail"]["password"])
+        try:
+            mail.login(CONFIG["gmail"]["email"], CONFIG["gmail"]["password"])
+        except imaplib.IMAP4.error as e:
+            print(f"[otp] IMAP login failed: {e}", flush=True)
+            return None
         mail.select("inbox")
 
-        status, messages = mail.search(None, '(UNSEEN FROM "roadtests-donotreply@icbc.com")')
+        status, messages = mail.search(None, 'FROM "roadtests-donotreply@icbc.com"')
         if status != "OK":
-            print("Failed to find emails from ICBC")
+            print("[otp] IMAP search failed (status not OK)", flush=True)
             return None
 
         message_ids = messages[0].split()
-        if not message_ids:
-            print("No new emails from ICBC")
+        new_ids = [mid for mid in message_ids if int(mid) > _icbc_email_base_seq]
+        if not new_ids:
+            print(f"No new emails from ICBC (base seq={_icbc_email_base_seq}, total={len(message_ids)})", flush=True)
             return None
 
-        latest_email_id = message_ids[-1]
+        latest_email_id = new_ids[-1]
         status, msg_data = mail.fetch(latest_email_id, "(RFC822)")
         if status != "OK":
             print("Failed to read email")
